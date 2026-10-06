@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <h2>防灾宣传管理</h2>
-        <p class="page-desc">维护宣传活动，围绕活动编号、宣传主题、宣传方式、覆盖村组做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护宣传活动，待办入口与归档入口共用同一份阶段结果；只有完成或取消的活动才能归档。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记宣传活动</button>
@@ -37,17 +37,17 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
-          <th>当前状态</th>
-          <th>可执行动作</th>
+          <th>当前阶段</th>
+          <th>可执行动作（待办/归档共用阶段结果）</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+          <td><span :class="['stage-tag', stageClass(row.status)]">{{ row.status }}</span></td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in actionsFor(row)"
               :key="action"
               class="link"
               type="button"
@@ -55,6 +55,7 @@
             >
               {{ action }}
             </button>
+            <span v-if="!actionsFor(row).length" class="muted">已归档，无待办</span>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -64,7 +65,7 @@
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条防灾宣传记录</span>
+      <span>共 {{ total }} 条防灾宣传记录｜其中待办 {{ pendingCount }} 条</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -74,6 +75,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import {
+  availableActionsFor,
   downloadEntries,
   listEntries,
   moduleMeta,
@@ -82,22 +84,43 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('propaganda')
-const columns = ["活动编号", "宣传主题", "宣传方式", "覆盖村组", "活动日期", "参与人数", "组织人", "活动状态"]
-const actions = ["开展活动", "确认完成", "取消活动"]
-const statuses = ["待开展", "进行中", "已完成", "已取消"]
-const stats = [{"label": "本月活动数", "value": 0}, {"label": "已完成数", "value": 0}, {"label": "覆盖人次", "value": 0}]
+const columns = ['活动编号', '宣传主题', '宣传方式', '覆盖村组', '活动日期', '参与人数', '组织人']
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
 const statusSummary = computed(() =>
-  statuses.map((status: string) => ({
+  meta.statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+const pendingCount = computed(() => rows.value.filter((row) => row.pending).length)
+
+const stats = computed(() => {
+  const monthPrefix = new Date().toISOString().slice(0, 7)
+  const monthly = rows.value.filter((row) => String(row.活动日期 ?? '').startsWith(monthPrefix)).length
+  const done = rows.value.filter((row) => ['已完成', '已归档'].includes(String(row.status))).length
+  const coverage = rows.value.reduce((sum, row) => sum + (Number(row.参与人数 ?? 0) || 0), 0)
+  return [
+    { label: '本月活动数', value: monthly },
+    { label: '已完成数', value: done },
+    { label: '覆盖人次', value: coverage },
+  ]
+})
+
+/** 待办与归档入口取同一条动作链：阶段不允许的动作一律不出现。 */
+function actionsFor(row: EntryRow): string[] {
+  return availableActionsFor(meta.key, String(row.status))
+}
+
+function stageClass(status: string | number | boolean): string {
+  return `stage-${String(status)}`
+}
 
 function resetFilters() {
   filters.value = {}
@@ -114,11 +137,15 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  if (action === '归档' && !window.confirm(`确认归档宣传活动「${row.活动编号}」？`)) {
+    return
+  }
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  errorMessage.value = result.message
   reload()
 }
 
@@ -135,3 +162,28 @@ function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.stage-tag {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  background: #eef2f7;
+}
+.stage-已归档 {
+  background: #e7f6ec;
+  color: #1a7f37;
+}
+.stage-已完成 {
+  background: #e8f1ff;
+  color: #1f6feb;
+}
+.stage-已取消 {
+  background: #fdecec;
+  color: #b42318;
+}
+.muted {
+  color: var(--muted);
+}
+</style>
